@@ -67,7 +67,7 @@ python zg.py history - Displays the timeline of your snapshots.
 
 python zg.py undo <id> - Downloads snapshot <id>, cleans your local folder, and extracts it.
 
-⚙️ Configuration & Ignore List
+# ⚙️ Configuration & Ignore List
 
 When you run init, ZeroGit creates a hidden .zg_config.json file in your directory.
 You can edit this file to add folders or files that should never be uploaded (like node_modules, venv, or .env files).
@@ -85,7 +85,7 @@ You can edit this file to add folders or files that should never be uploaded (li
 
 Note: ZeroGit uses Linux-native POSIX path evaluation. It will reliably ignore these folders regardless of your OS.
 
-#🛡️ Architecture & Security
+# 🛡️ Architecture & Security
 
 No ZIP Bombs: The temp-file generation runs locally on the HDD (preventing RAM/OOM crashes on large folders) and protects against recursive self-zipping.
 
