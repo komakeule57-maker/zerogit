@@ -1,4 +1,4 @@
-#📦 ZeroGit (The Naked VCS)
+# 📦 ZeroGit (The Naked VCS)
 
 A single-file PHP cloud & Python CLI for solo developers. Zero dependencies. Zero Git.
 
@@ -6,7 +6,7 @@ ZeroGit is a brutally pragmatic Version Control System designed for developers w
 
 If you ever thought: "I just want to ZIP this folder and send it to my server to have a backup and a history", ZeroGit is exactly that—but automated, highly optimized, and wrapped in a beautiful Web UI.
 
-#✨ Features
+# ✨ Features
 
 Zero Dependencies: The CLI uses pure Python standard libraries (no pip install). The backend is a single PHP file using PDO MySQL.
 
@@ -22,7 +22,7 @@ Auto-Pruning: Keeps your server clean. Automatically deletes old ZIPs and keeps 
 
 Public/Private Repos: Share your code with the world via read-only access and a "Download ZIP" button for guests.
 
-#🚀 60-Second Setup
+# 🚀 60-Second Setup
 
 1. The Server (Backend)
 
