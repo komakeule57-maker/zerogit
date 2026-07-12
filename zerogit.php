@@ -33,9 +33,9 @@ function prune_repo($db, $repo_id, $snap_dir) {
 // 1. DATENBANK & KONFIGURATION
 // =========================================================================
 $db_host = 'localhost';
-$db_name = 'freya_zerogit';
-$db_user = 'freya_absti';
-$db_pass = 'eQ7XhkL8SefZNqkc';
+$db_name = 'db_name';
+$db_user = 'db_user';
+$db_pass = 'db_password';
 $snap_dir = __DIR__ . '/snapshots';
 
 if (!is_dir($snap_dir)) {
