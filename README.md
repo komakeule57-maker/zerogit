@@ -1,4 +1,4 @@
-📦 ZeroGit (The Naked VCS)
+#📦 ZeroGit (The Naked VCS)
 
 A single-file PHP cloud & Python CLI for solo developers. Zero dependencies. Zero Git.
 
@@ -6,7 +6,7 @@ ZeroGit is a brutally pragmatic Version Control System designed for developers w
 
 If you ever thought: "I just want to ZIP this folder and send it to my server to have a backup and a history", ZeroGit is exactly that—but automated, highly optimized, and wrapped in a beautiful Web UI.
 
-✨ Features
+#✨ Features
 
 Zero Dependencies: The CLI uses pure Python standard libraries (no pip install). The backend is a single PHP file using PDO MySQL.
 
@@ -22,7 +22,7 @@ Auto-Pruning: Keeps your server clean. Automatically deletes old ZIPs and keeps 
 
 Public/Private Repos: Share your code with the world via read-only access and a "Download ZIP" button for guests.
 
-🚀 60-Second Setup
+#🚀 60-Second Setup
 
 1. The Server (Backend)
 
@@ -46,14 +46,14 @@ Click Create Repository and note down the Repo ID.
 
 Drop the zg.py file into the root of your local project folder. Open your terminal and link it to your new cloud:
 
-# Initialize the connection
+Initialize the connection
 $ python zg.py init [https://yourdomain.com/zerogit.php](https://yourdomain.com/zerogit.php) admin admin <REPO_ID>
 
-# Save and push your first snapshot
+Save and push your first snapshot
 $ python zg.py save "Initial Commit"
 
 
-🛠️ CLI Commands
+#🛠️ CLI Commands
 
 python zg.py init <url> <u> <p> <id> - Links the current folder to your ZeroGit server.
 
@@ -85,7 +85,7 @@ You can edit this file to add folders or files that should never be uploaded (li
 
 Note: ZeroGit uses Linux-native POSIX path evaluation. It will reliably ignore these folders regardless of your OS.
 
-🛡️ Architecture & Security
+#🛡️ Architecture & Security
 
 No ZIP Bombs: The temp-file generation runs locally on the HDD (preventing RAM/OOM crashes on large folders) and protects against recursive self-zipping.
 
