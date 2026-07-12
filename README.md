@@ -55,33 +55,17 @@ $ python zg.py save "Initial Commit"
 
 🛠️ CLI Commands
 
-Command
+python zg.py init <url> <u> <p> <id> - Links the current folder to your ZeroGit server.
 
-Description
+python zg.py save "Message" - Zips your folder, pushes it, and registers a commit.
 
-python zg.py init <url> <u> <p> <id>
+python zg.py save "Msg" --force - Force-pushes, ignoring server-side Web-UI edits.
 
-Links the current folder to your ZeroGit server.
+python zg.py diff - Shows local changes compared to the latest server commit.
 
-python zg.py save "Message"
+python zg.py history - Displays the timeline of your snapshots.
 
-Zips your folder, pushes it, and registers a commit.
-
-python zg.py save "Msg" --force
-
-Force-pushes, ignoring server-side Web-UI edits.
-
-python zg.py diff
-
-Shows local changes compared to the latest server commit.
-
-python zg.py history
-
-Displays the timeline of your snapshots.
-
-python zg.py undo <id>
-
-Downloads snapshot <id>, cleans your local folder, and extracts it.
+python zg.py undo <id> - Downloads snapshot <id>, cleans your local folder, and extracts it.
 
 ⚙️ Configuration & Ignore List
 
