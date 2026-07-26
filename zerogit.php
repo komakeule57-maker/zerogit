@@ -303,6 +303,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 header("Location: ?repo=" . (int)$_POST['repo_id']); exit;
             }
 
+            if ($_POST['action'] === 'fork_repo') {
+                $source_id = (int)$_POST['source_repo_id'];
+                
+                $stmt = $db->prepare("SELECT * FROM repos WHERE id = ? AND is_public = 1");
+                $stmt->execute([$source_id]);
+                $source_repo = $stmt->fetch();
+
+                if ($source_repo) {
+                    $stmt = $db->prepare("SELECT hash FROM commits WHERE repo_id = ? ORDER BY id DESC LIMIT 1");
+                    $stmt->execute([$source_id]);
+                    $latest = $stmt->fetch();
+
+                    if ($latest) {
+                        $new_name = $source_repo['name'] . " (Fork)";
+                        $stmt = $db->prepare("INSERT INTO repos (user_id, name, description, is_public) VALUES (?, ?, ?, ?)");
+                        $stmt->execute([$_SESSION['user_id'], $new_name, "Geforkt von " . $source_repo['name'], 0]);
+                        $new_repo_id = $db->lastInsertId();
+
+                        $old_file = $snap_dir . "/repo_{$source_id}_{$latest['hash']}.pack";
+                        $new_file = $snap_dir . "/repo_{$new_repo_id}_{$latest['hash']}.pack";
+                        
+                        if (file_exists($old_file)) {
+                            copy($old_file, $new_file);
+                            $stmt = $db->prepare("INSERT INTO commits (repo_id, hash, message) VALUES (?, ?, ?)");
+                            $stmt->execute([$new_repo_id, $latest['hash'], "Initial Commit (Fork)"]);
+                            
+                            header("Location: ?repo=" . $new_repo_id); exit;
+                        } else { $error = "Snapshot-Datei des Ursprungsrepos fehlt."; }
+                    } else { $error = "Das Repo ist leer und kann nicht geforkt werden."; }
+                } else { $error = "Ursprungs-Repo nicht gefunden oder nicht öffentlich."; }
+            }
+
             if ($_POST['action'] === 'web_commit') {
                 $repo_id = (int)$_POST['repo_id'];
                 
@@ -439,6 +471,15 @@ if ($active_repo_id) {
                                     <input type="hidden" name="action" value="toggle_public"><input type="hidden" name="repo_id" value="<?= $active_repo_id ?>"><input type="hidden" name="new_status" value="<?= $active_repo['is_public'] ? 0 : 1 ?>">
                                     <button type="submit" class="text-xs px-2 py-1 rounded border <?= $active_repo['is_public'] ? 'border-green-500/50 text-green-400' : 'border-gray-600 text-gray-400' ?>">
                                         <?= $active_repo['is_public'] ? '🌍 Öffentlich' : '🔒 Privat' ?>
+                                    </button>
+                                </form>
+                            <?php elseif ($is_logged_in): ?>
+                                <form method="POST" action="?" class="inline-block">
+                                    <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+                                    <input type="hidden" name="action" value="fork_repo">
+                                    <input type="hidden" name="source_repo_id" value="<?= $active_repo_id ?>">
+                                    <button type="submit" class="text-xs px-2 py-1 rounded border border-purple-500/50 text-purple-400 hover:bg-purple-900/30 transition cursor-pointer">
+                                        🍴 Fork (Kopieren)
                                     </button>
                                 </form>
                             <?php endif; ?>
