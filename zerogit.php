@@ -1,7 +1,7 @@
 <?php
 // Dateiname: zerogit.php
 // Funktion: Vollständiges Backend für ZeroGit (MySQL).
-// Features: Collision-Detection (Merge Konflikt Stop), Config-Ignore Ready, Web-Editor
+// Features: Collision-Detection (Merge Konflikt Stop), Config-Ignore Ready, Web-Editor, Hierarchischer Dateibaum
 
 session_start();
 
@@ -24,7 +24,7 @@ function prune_repo($db, $repo_id, $snap_dir) {
     $commits = $stmt->fetchAll();
     while (count($commits) > 50) {
         $oldest = array_shift($commits);
-        @unlink($snap_dir . "/repo_{$repo_id}_{$oldest['hash']}.zip");
+        @unlink($snap_dir . "/repo_{$repo_id}_{$oldest['hash']}.pack");
         $db->prepare("DELETE FROM commits WHERE id = ?")->execute([$oldest['id']]);
     }
 }
@@ -33,14 +33,15 @@ function prune_repo($db, $repo_id, $snap_dir) {
 // 1. DATENBANK & KONFIGURATION
 // =========================================================================
 $db_host = 'localhost';
-$db_name = 'db_name';
-$db_user = 'db_user';
-$db_pass = 'db_password';
+$db_name = 'freya_zerogit';
+$db_user = 'freya_absti';
+$db_pass = 'eQ7XhkL8SefZNqkc';
 $snap_dir = __DIR__ . '/snapshots';
 
 if (!is_dir($snap_dir)) {
     @mkdir($snap_dir, 0777, true);
     @file_put_contents($snap_dir . '/.htaccess', "Order Deny,Allow\nDeny from all");
+    @file_put_contents($snap_dir . '/index.php', "<?php http_response_code(403); die('Forbidden - ZeroGit Vault');");
 }
 
 try {
@@ -86,6 +87,17 @@ try {
         $db->exec("ALTER TABLE repos ADD COLUMN is_public TINYINT(1) DEFAULT 0");
     }
 
+    // Auto-Patch für API Token (Erhöhte Sicherheit)
+    try {
+        $db->query("SELECT api_token FROM users LIMIT 1");
+    } catch (PDOException $e) {
+        $db->exec("ALTER TABLE users ADD COLUMN api_token VARCHAR(64) NULL");
+        // Generiere sichere Tokens für existierende User
+        $users = $db->query("SELECT id FROM users WHERE api_token IS NULL")->fetchAll();
+        $st = $db->prepare("UPDATE users SET api_token = ? WHERE id = ?");
+        foreach($users as $u) { $st->execute([bin2hex(random_bytes(32)), $u['id']]); }
+    }
+
 } catch (PDOException $e) {
     die("DB-Fehler: Bitte Zugangsdaten in der zerogit.php prüfen. Details: " . $e->getMessage());
 }
@@ -110,7 +122,7 @@ if (isset($_GET['download']) && isset($_GET['repo'])) {
         $stmt->execute([$repo_id]);
         $c = $stmt->fetch();
         if ($c) {
-            $file = $snap_dir . "/repo_{$repo_id}_{$c['hash']}.zip";
+            $file = $snap_dir . "/repo_{$repo_id}_{$c['hash']}.pack";
             if (file_exists($file)) {
                 $clean_name = preg_replace('/[^a-zA-Z0-9_-]/', '_', $repo['name']);
                 header('Content-Type: application/zip');
@@ -133,12 +145,14 @@ $json = json_decode($input_data, true);
 if ($json && isset($json['action'])) {
     header('Content-Type: application/json');
     
-    $stmt = $db->prepare("SELECT * FROM users WHERE username = ?");
-    $stmt->execute([$json['username'] ?? '']);
+    // Auth erfolgt jetzt über das API Token, nicht mehr über das Klartext-Passwort
+    $stmt = $db->prepare("SELECT * FROM users WHERE username = ? AND api_token = ?");
+    $stmt->execute([$json['username'] ?? '', $json['api_token'] ?? '']);
     $api_user = $stmt->fetch();
 
-    if (!$api_user || !password_verify($json['password'] ?? '', $api_user['password'])) {
-        echo json_encode(['status' => 'error', 'message' => 'Falscher Benutzer oder Passwort.']);
+    if (!$api_user) {
+        usleep(random_int(400000, 800000)); // E>H Anti-Brute-Force
+        echo json_encode(['status' => 'error', 'message' => 'Ungültiger Benutzer oder falsches API Token.']);
         exit;
     }
 
@@ -154,6 +168,9 @@ if ($json && isset($json['action'])) {
         $msg = $json['message'] ?? 'Auto-Snapshot';
         $b64_zip = $json['zip_data'];
         
+        // Transaktion starten, um Race Conditions bei gleichzeitigen Pushes zu verhindern
+        $db->beginTransaction();
+        
         // --- KOLLISIONS ERKENNUNG (Merge Conflict Logic) ---
         $client_base = isset($json['base_commit']) ? (int)$json['base_commit'] : 0;
         $force = isset($json['force']) ? (bool)$json['force'] : false;
@@ -164,6 +181,7 @@ if ($json && isset($json['action'])) {
         $latest_id = $latest ? (int)$latest['id'] : 0;
         
         if (!$force && $latest_id > 0 && $client_base !== $latest_id) {
+            $db->rollBack();
             echo json_encode([
                 'status' => 'error', 
                 'message' => "KOLLISION: Der Server ist auf Commit [$latest_id], dein lokaler Stand auf [$client_base].\nJemand (oder du per Web-Editor) hat neueren Code gepusht.\n-> Nutze 'python zg.py pull $latest_id' zum synchronisieren.\n-> Oder hänge '--force' an deinen save-Befehl an, um den Server rigoros zu überschreiben."
@@ -174,17 +192,20 @@ if ($json && isset($json['action'])) {
 
         $zip_bin = base64_decode($b64_zip);
         $hash = substr(hash('sha256', $zip_bin . time()), 0, 12);
-        $file_path = $snap_dir . "/repo_{$repo_id}_{$hash}.zip";
+        // Wir speichern als .pack, damit Nginx/Apache die Datei bei fehlender .htaccess nicht direkt ausliefern
+        $file_path = $snap_dir . "/repo_{$repo_id}_{$hash}.pack";
         
         file_put_contents($file_path, $zip_bin);
 
         $stmt = $db->prepare("INSERT INTO commits (repo_id, hash, message) VALUES (?, ?, ?)");
         $stmt->execute([$repo_id, $hash, $msg]);
         
-        // ZENTRALES PRUNING
+        $new_commit_id = $db->lastInsertId(); // FIX: ID zwingend vor dem commit() sichern!
+        
         prune_repo($db, $repo_id, $snap_dir);
         
-        echo json_encode(['status' => 'success', 'commit_id' => $db->lastInsertId()]);
+        $db->commit();
+        echo json_encode(['status' => 'success', 'commit_id' => $new_commit_id]);
         exit;
     }
     
@@ -201,8 +222,8 @@ if ($json && isset($json['action'])) {
         $stmt->execute([$commit_id, $repo_id]);
         $commit = $stmt->fetch();
         
-        if ($commit && file_exists($snap_dir . "/repo_{$repo_id}_{$commit['hash']}.zip")) {
-            $b64_data = base64_encode(file_get_contents($snap_dir . "/repo_{$repo_id}_{$commit['hash']}.zip"));
+        if ($commit && file_exists($snap_dir . "/repo_{$repo_id}_{$commit['hash']}.pack")) {
+            $b64_data = base64_encode(file_get_contents($snap_dir . "/repo_{$repo_id}_{$commit['hash']}.pack"));
             echo json_encode(['status' => 'success', 'zip_data' => $b64_data]);
         } else {
             echo json_encode(['status' => 'error', 'message' => 'Snapshot nicht gefunden.']);
@@ -221,6 +242,13 @@ $error = '';
 $success = '';
 $is_logged_in = isset($_SESSION['user_id']);
 
+// Auto-Heilung: Repariert alte Sessions, bei denen das API-Token noch fehlt
+if ($is_logged_in && empty($_SESSION['api_token'])) {
+    $stmt = $db->prepare("SELECT api_token FROM users WHERE id = ?");
+    $stmt->execute([$_SESSION['user_id']]);
+    $_SESSION['api_token'] = $stmt->fetchColumn();
+}
+
 if (isset($_GET['logout'])) { session_destroy(); header("Location: ?"); exit; }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -234,9 +262,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->execute([$_POST['username']]);
             $user = $stmt->fetch();
             if ($user && password_verify($_POST['password'], $user['password'])) {
-                $_SESSION['user_id'] = $user['id']; $_SESSION['username'] = $user['username'];
+                $_SESSION['user_id'] = $user['id']; 
+                $_SESSION['username'] = $user['username'];
+                $_SESSION['api_token'] = $user['api_token']; // Session merkt sich das Token
                 header("Location: ?"); exit;
-            } else { $error = "Falscher Benutzername oder Passwort."; }
+            } else { 
+                usleep(random_int(400000, 800000)); // E>H Anti-Brute-Force
+                $error = "Falscher Benutzername oder Passwort."; 
+            }
         }
         
         if ($_POST['action'] === 'register') {
@@ -246,8 +279,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $stmt->execute([$username]);
                 if ($stmt->fetch()) { $error = "Benutzername vergeben."; } 
                 else {
-                    $stmt = $db->prepare("INSERT INTO users (username, password) VALUES (?, ?)");
-                    $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT)]);
+                    $token = bin2hex(random_bytes(32));
+                    $stmt = $db->prepare("INSERT INTO users (username, password, api_token) VALUES (?, ?, ?)");
+                    $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $token]);
                     $success = "Registrierung erfolgreich!";
                 }
             }
@@ -271,38 +305,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if ($_POST['action'] === 'web_commit') {
                 $repo_id = (int)$_POST['repo_id'];
+                
+                // CRITICAL FIX: Zip Slip / Path Traversal verhindern (Korrigierte Version)
+                // Wir lehnen jegliche Navigationsversuche (..) und absolute Pfade sofort ab
                 $filepath = $_POST['filepath'];
-                
-                $stmt = $db->prepare("SELECT hash FROM commits WHERE repo_id = ? AND repo_id IN (SELECT id FROM repos WHERE user_id = ?) ORDER BY id DESC LIMIT 1");
-                $stmt->execute([$repo_id, $_SESSION['user_id']]);
-                $latest = $stmt->fetch();
-                
-                if ($latest && file_exists($snap_dir . "/repo_{$repo_id}_{$latest['hash']}.zip")) {
-                    $old_zip = $snap_dir . "/repo_{$repo_id}_{$latest['hash']}.zip";
-                    $temp_zip = sys_get_temp_dir() . '/zg_temp_' . uniqid() . '.zip';
-                    copy($old_zip, $temp_zip);
-                    
-                    $zip = new ZipArchive;
-                    if ($zip->open($temp_zip) === TRUE) {
-                        $zip->addFromString($filepath, $_POST['content']);
-                        $zip->close();
-                        
-                        $zip_bin = file_get_contents($temp_zip);
-                        unlink($temp_zip);
-                        
-                        $hash = substr(hash('sha256', $zip_bin . time()), 0, 12);
-                        file_put_contents($snap_dir . "/repo_{$repo_id}_{$hash}.zip", $zip_bin);
-                        
-                        $msg = trim($_POST['commit_msg']) ?: "Web Edit: " . basename($filepath);
-                        $stmt = $db->prepare("INSERT INTO commits (repo_id, hash, message) VALUES (?, ?, ?)");
-                        $stmt->execute([$repo_id, $hash, $msg]);
-                        
-                        // FIX: Auch nach dem Web-Commit das Pruning auslösen!
-                        prune_repo($db, $repo_id, $snap_dir);
-                        
-                        $success = "🚀 Web-Commit erfolgreich!";
+                $path_parts = explode('/', $filepath);
+                $is_valid_path = true;
+                foreach ($path_parts as $part) {
+                    if ($part === '..' || $part === '.') {
+                        $error = "Sicherheitsfehler: Ungültiger Dateipfad (Directory Traversal erkannt).";
+                        $is_valid_path = false;
+                        break;
                     }
-                } else { $error = "Fehler oder keine Berechtigung."; }
+                }
+                
+                if ($is_valid_path) {
+                    // Führende Slashes entfernen und Mehrfach-Slashes zu einem zusammenfassen
+                    $filepath = ltrim(preg_replace('/\/+/', '/', $filepath), '/');
+                    
+                    $stmt = $db->prepare("SELECT hash FROM commits WHERE repo_id = ? AND repo_id IN (SELECT id FROM repos WHERE user_id = ?) ORDER BY id DESC LIMIT 1");
+                    $stmt->execute([$repo_id, $_SESSION['user_id']]);
+                    $latest = $stmt->fetch();
+                    
+                    if ($latest && file_exists($snap_dir . "/repo_{$repo_id}_{$latest['hash']}.pack")) {
+                        $old_zip = $snap_dir . "/repo_{$repo_id}_{$latest['hash']}.pack";
+                        $temp_zip = sys_get_temp_dir() . '/zg_temp_' . uniqid() . '.zip';
+                        copy($old_zip, $temp_zip);
+                        
+                        $zip = new ZipArchive;
+                        if ($zip->open($temp_zip) === TRUE) {
+                            $zip->addFromString($filepath, $_POST['content']);
+                            $zip->close();
+                            
+                            $zip_bin = file_get_contents($temp_zip);
+                            unlink($temp_zip);
+                            
+                            $hash = substr(hash('sha256', $zip_bin . time()), 0, 12);
+                            file_put_contents($snap_dir . "/repo_{$repo_id}_{$hash}.pack", $zip_bin);
+                            
+                            $msg = !empty($_POST['commit_msg']) ? trim($_POST['commit_msg']) : "Web Edit: " . basename($filepath);
+                            $stmt = $db->prepare("INSERT INTO commits (repo_id, hash, message) VALUES (?, ?, ?)");
+                            $stmt->execute([$repo_id, $hash, $msg]);
+                            
+                            // FIX: Auch nach dem Web-Commit das Pruning auslösen!
+                            prune_repo($db, $repo_id, $snap_dir);
+                            
+                            $success = "🚀 Web-Commit erfolgreich!";
+                        }
+                    } else { $error = "Fehler oder keine Berechtigung."; }
+                }
             }
         }
     }
@@ -349,7 +400,17 @@ if ($active_repo_id) {
     <header class="border-b border-[#30363d] bg-[#161b22] py-4 px-6 flex justify-between items-center">
         <a href="?" class="text-xl font-bold text-white tracking-tight">ZeroGit</a>
         <?php if ($is_logged_in): ?>
-            <div class="text-sm">Angemeldet als <strong><?= htmlspecialchars($_SESSION['username']) ?></strong> &middot; <a href="?logout=1" class="text-gray-400">Abmelden</a></div>
+            <div class="text-sm flex items-center gap-3">
+                <span>Angemeldet als <strong><?= htmlspecialchars($_SESSION['username']) ?></strong></span>
+                
+                <div class="flex items-center bg-[#0d1117] border border-[#30363d] rounded overflow-hidden" title="Dein API-Token für das Terminal">
+                    <span class="px-2 text-xs text-gray-500">🔑</span>
+                    <input type="text" id="api_token_field" value="<?= $_SESSION['api_token'] ?>" class="bg-transparent text-xs text-gray-400 w-24 outline-none cursor-text py-1" readonly onclick="this.select();">
+                    <button type="button" onclick="document.getElementById('api_token_field').select(); document.execCommand('copy'); const t = this.innerHTML; this.innerHTML = '✅'; setTimeout(() => this.innerHTML = t, 1500);" class="bg-[#21262d] hover:bg-[#30363d] text-gray-300 px-2 py-1 text-xs transition-colors border-l border-[#30363d] cursor-pointer">📋 cp</button>
+                </div>
+                
+                <a href="?logout=1" class="text-gray-400 hover:text-white transition-colors border-l border-[#30363d] pl-3">Abmelden</a>
+            </div>
         <?php else: ?>
             <a href="?" class="text-[#58a6ff] text-sm">Login</a>
         <?php endif; ?>
@@ -388,9 +449,16 @@ if ($active_repo_id) {
                 <?php if (isset($_GET['edit']) && $latest_commit): 
                     $edit_file = $_GET['edit'];
                     $zip = new ZipArchive; $file_content = '';
-                    if ($zip->open($snap_dir . "/repo_{$active_repo_id}_{$latest_commit['hash']}.zip") === TRUE) {
+                    if ($zip->open($snap_dir . "/repo_{$active_repo_id}_{$latest_commit['hash']}.pack") === TRUE) {
                         $file_content = $zip->getFromName($edit_file) ?: "Fehler beim Lesen."; $zip->close();
                     }
+                    
+                    // CodeMirror: Dynamische Spracherkennung für korrektes Highlighting
+                    $ext = strtolower(pathinfo($edit_file, PATHINFO_EXTENSION));
+                    $cm_mode = 'javascript';
+                    if ($ext === 'php') $cm_mode = 'application/x-httpd-php';
+                    if ($ext === 'css') $cm_mode = 'css';
+                    if ($ext === 'html') $cm_mode = 'htmlmixed';
                 ?>
                     <div class="zg-panel overflow-hidden">
                         <div class="bg-[#161b22] px-4 py-3 border-b border-[#30363d] flex justify-between">
@@ -413,32 +481,65 @@ if ($active_repo_id) {
                     </div>
                     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
                     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/javascript/javascript.min.js"></script>
+                    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/xml/xml.min.js"></script>
+                    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/htmlmixed/htmlmixed.min.js"></script>
+                    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/css/css.min.js"></script>
+                    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/clike/clike.min.js"></script>
                     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/php/php.min.js"></script>
-                    <script>var editor = CodeMirror.fromTextArea(document.getElementById("code_editor"), { lineNumbers: true, theme: "darcula", mode: "javascript", readOnly: <?= $is_owner ? 'false' : 'true' ?> });</script>
+                    <script>var editor = CodeMirror.fromTextArea(document.getElementById("code_editor"), { lineNumbers: true, theme: "darcula", mode: "<?= $cm_mode ?>", readOnly: <?= $is_owner ? 'false' : 'true' ?> });</script>
 
                 <?php else: ?>
-                    <div class="zg-panel overflow-hidden">
-                        <div class="bg-[#161b22] px-4 py-3 border-b border-[#30363d]"><h3 class="font-semibold text-white">Dateibaum</h3></div>
+                    <div class="zg-panel overflow-hidden mb-6">
+                        <div class="bg-[#161b22] px-4 py-3 border-b border-[#30363d] flex justify-between items-center">
+                            <h3 class="font-semibold text-white">Dateibaum</h3>
+                            <span class="text-xs text-gray-500 font-mono">Commit: <?= substr($latest_commit['hash'], 0, 8) ?? 'none' ?></span>
+                        </div>
                         <?php if ($latest_commit): ?>
-                            <ul class="divide-y divide-[#30363d]">
+                            <ul class="flex flex-col">
                                 <?php 
                                 $zip = new ZipArchive;
-                                if ($zip->open($snap_dir . "/repo_{$active_repo_id}_{$latest_commit['hash']}.zip") === TRUE) {
+                                if ($zip->open($snap_dir . "/repo_{$active_repo_id}_{$latest_commit['hash']}.pack") === TRUE) {
                                     $files = []; 
                                     for ($i = 0; $i < $zip->numFiles; $i++) {
                                         $stat = $zip->statIndex($i);
+                                        // Wir filtern explizite Ordner-Einträge (enden mit /) heraus, 
+                                        // da wir die Ordnerstruktur dynamisch aus den Dateipfaden extrahieren.
+                                        if (substr($stat['name'], -1) === '/') continue; 
                                         $files[] = ['name' => $stat['name'], 'size' => $stat['size']];
                                     }
+                                    
+                                    // Alphabetische Sortierung zwingt Dateien automatisch in korrekte Ordnergruppen
                                     usort($files, function($a, $b) { return strcmp($a['name'], $b['name']); });
                                     
+                                    $current_path = [];
                                     foreach ($files as $f) {
-                                        $file = $f['name'];
+                                        $parts = explode('/', $f['name']);
+                                        $filename = array_pop($parts); // Nur der Dateiname (z.b. style.css)
+                                        $dir_path = $parts;            // Die Ordner-Struktur davor (z.b. ['public', 'css'])
                                         $size_str = formatBytes($f['size']);
-                                        $depth = substr_count($file, '/');
                                         
-                                        echo '<li class="hover:bg-[#21262d] flex justify-between items-center px-4 py-2 text-sm">';
-                                        echo '<div class="text-gray-300" style="padding-left: '.($depth * 1.5).'rem;">📄 '.htmlspecialchars($file).'</div>';
-                                        echo '<div class="flex items-center gap-4"><span class="text-xs text-gray-500 font-mono">'.$size_str.'</span><a href="?repo='.$active_repo_id.'&edit='.urlencode($file).'" class="text-blue-400">Ansehen</a></div>';
+                                        // 1. Finde den Index, an dem sich der aktuelle Pfad vom vorherigen unterscheidet
+                                        $diff_index = 0;
+                                        while (isset($current_path[$diff_index]) && isset($dir_path[$diff_index]) && $current_path[$diff_index] === $dir_path[$diff_index]) {
+                                            $diff_index++;
+                                        }
+                                        
+                                        // 2. Gebe alle NEUEN Ordner-Hierarchien aus, in die wir gerade abtauchen
+                                        for ($i = $diff_index; $i < count($dir_path); $i++) {
+                                            $pad = $i * 1.5 + 1; // Einrückung pro Ebene
+                                            echo '<li class="bg-[#1c2128]/60 border-y border-[#30363d]/40 px-4 py-1.5 text-sm font-semibold text-gray-400 flex items-center gap-2" style="padding-left: '.$pad.'rem;">';
+                                            echo '📁 <span>' . htmlspecialchars($dir_path[$i]) . '</span>';
+                                            echo '</li>';
+                                        }
+                                        
+                                        $current_path = $dir_path;
+                                        $depth = count($dir_path);
+                                        $file_pad = $depth * 1.5 + 1.5; // Datei noch etwas weiter einrücken als den Ordner
+                                        
+                                        // 3. Datei ausgeben
+                                        echo '<li class="hover:bg-[#21262d] flex justify-between items-center px-4 py-2 text-sm border-b border-[#30363d]/20 last:border-0 transition-colors group">';
+                                        echo '<div class="text-gray-300 flex items-center gap-2" style="padding-left: '.$file_pad.'rem;">📄 <span class="group-hover:text-white transition-colors">'.htmlspecialchars($filename).'</span></div>';
+                                        echo '<div class="flex items-center gap-4"><span class="text-xs text-gray-500 font-mono">'.$size_str.'</span><a href="?repo='.$active_repo_id.'&edit='.urlencode($f['name']).'" class="text-blue-400 hover:text-blue-300 bg-blue-900/10 hover:bg-blue-900/30 px-2 py-1 rounded transition-colors text-xs">Editor</a></div>';
                                         echo '</li>';
                                     } 
                                     $zip->close();
@@ -453,7 +554,7 @@ if ($active_repo_id) {
                                     $auto_url = $protocol . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['SCRIPT_NAME'];
                                 ?>
                                     <pre class="bg-black p-4 rounded text-sm overflow-x-auto text-left inline-block">
-<code class="block mb-2 text-gray-500"><span class="select-none">$ </span><span class="text-green-400">python zg.py init <?= $auto_url ?> <?= htmlspecialchars($_SESSION['username']) ?> &lt;DEIN_PASSWORT&gt; <?= $active_repo_id ?></span></code>
+<code class="block mb-2 text-gray-500"><span class="select-none">$ </span><span class="text-green-400">python zg.py init <?= $auto_url ?> <?= htmlspecialchars($_SESSION['username']) ?> &lt;DEIN_API_TOKEN&gt; <?= $active_repo_id ?></span></code>
 <code class="block text-gray-500"><span class="select-none">$ </span><span class="text-green-400">python zg.py save "Initial Commit"</span></code>
                                     </pre>
                                 <?php endif; ?>
@@ -467,14 +568,22 @@ if ($active_repo_id) {
                     <div class="w-1/3 space-y-6">
                         <div class="zg-panel p-4">
                             <h3 class="text-sm font-semibold text-gray-400 mb-4">Meine Repositories</h3>
-                            <?php foreach ($db->query("SELECT * FROM repos WHERE user_id = {$_SESSION['user_id']} ORDER BY id DESC")->fetchAll() as $r): ?>
+                            <?php 
+                            // Raw-SQL bereinigt für konsistente PDO Prepared Statements
+                            $stmt = $db->prepare("SELECT * FROM repos WHERE user_id = ? ORDER BY id DESC");
+                            $stmt->execute([$_SESSION['user_id']]);
+                            foreach ($stmt->fetchAll() as $r): ?>
                                 <a href="?repo=<?= $r['id'] ?>" class="block p-2 hover:bg-[#21262d] rounded"><div class="text-blue-400 font-semibold"><?= htmlspecialchars($r['name']) ?></div></a>
                             <?php endforeach; ?>
                         </div>
                         <div class="zg-panel p-4">
                             <h3 class="text-sm font-semibold text-gray-400 mb-4">🌍 Explore</h3>
-                            <?php foreach ($db->query("SELECT r.*, u.username FROM repos r JOIN users u ON r.user_id=u.id WHERE is_public=1 AND user_id!={$_SESSION['user_id']} LIMIT 10")->fetchAll() as $r): ?>
-                                <a href="?repo=<?= $r['id'] ?>" class="block p-2 hover:bg-[#21262d] rounded"><div class="text-gray-300 font-semibold"><?= htmlspecialchars($r['name']) ?> <span class="text-xs text-gray-500">(<?= $r['username'] ?>)</span></div></a>
+                            <?php 
+                            // Raw-SQL bereinigt für konsistente PDO Prepared Statements
+                            $stmt = $db->prepare("SELECT r.*, u.username FROM repos r JOIN users u ON r.user_id=u.id WHERE is_public=1 AND user_id!= ? LIMIT 10");
+                            $stmt->execute([$_SESSION['user_id']]);
+                            foreach ($stmt->fetchAll() as $r): ?>
+                                <a href="?repo=<?= $r['id'] ?>" class="block p-2 hover:bg-[#21262d] rounded"><div class="text-gray-300 font-semibold"><?= htmlspecialchars($r['name']) ?> <span class="text-xs text-gray-500">(<?= htmlspecialchars($r['username']) ?>)</span></div></a>
                             <?php endforeach; ?>
                         </div>
                     </div>
@@ -505,7 +614,7 @@ if ($active_repo_id) {
                         <div class="mt-4 text-center text-sm"><a href="?<?= isset($_GET['view']) ? '' : 'view=register' ?>" class="text-blue-400">Modus wechseln</a></div>
                     </div>
 
-                    <!-- WIEDERHERGESTELLT: Explore-Ansicht für Gäste -->
+                    <!-- Explore-Ansicht für Gäste -->
                     <div class="w-full max-w-sm">
                         <div class="zg-panel p-6">
                             <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
