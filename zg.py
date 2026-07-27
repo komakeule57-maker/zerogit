@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Dateiname: zg.py
 # Funktion: ZeroGit CLI Client. Zippt, synct, bereinigt lokal, bietet Diff-Ansicht.
-# Maxime: E > H (Config-based Ignore, Collision-Detection mit --force, Auto-Migration)
+# Fixes Config-based Ignore, Collision-Detection mit --force, Auto-Migration
 
 import os
 import sys
