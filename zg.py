@@ -43,6 +43,13 @@ def get_config():
             _config_cache["last_commit"] = 0
             needs_save = True
             
+        # NEU: Auto-Patching für Secrets (Verhindert Leak an LLM)
+        critical_ignores = ['zg_env.php', '*.env', '*secret*', '*.pem']
+        for ci in critical_ignores:
+            if ci not in _config_cache.get("ignore_list", []):
+                _config_cache["ignore_list"].append(ci)
+                needs_save = True
+            
         if needs_save:
             save_config(_config_cache)
             
@@ -130,20 +137,20 @@ def should_ignore(filepath):
             
     return False
 
-def cmd_init(url, user, api_token, repo_id):
+def cmd_init(url, user, password, repo_id):
     if url.startswith("http://"):
         print("⚠️  WARNUNG: Du nutzt HTTP. Dein Token geht im Klartext übers Netz! Nutze wenn möglich HTTPS.")
 
     config = {
         "url": url if url.endswith('.php') else url.rstrip('/') + '/zerogit.php',
         "username": user,
-        "password": api_token, # Key bleibt "password" in der config wegen Kompatibilität
+        "password": password, # Key bleibt "password" in der config wegen Kompatibilität
         "repo_id": int(repo_id),
         "last_commit": 0,
         "ignore_list": [
             '.zg_config.json', '.git', 'node_modules', 'vendor', 
             '__pycache__', '.venv', 'env', '.DS_Store', 'zerogit.sqlite', 
-            './backup', './factory', './bpe_init'
+            './backup', './factory', './bpe_init', 'zg_env.php', '*.env', '*secret*', '*.pem'
         ]
     }
     save_config(config)
