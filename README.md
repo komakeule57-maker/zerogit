@@ -1,4 +1,4 @@
-📦 ZeroGit (The Naked VCS) + 🤖 Bobbycar Agent
+# 📦 ZeroGit (The Naked VCS) + 🤖 Bobbycar Agent
 
 A single-file PHP cloud & Python CLI for solo developers. Zero dependencies. Zero Git. Zero Setup-Hell.
 
@@ -8,7 +8,7 @@ If you ever thought: "I just want to ZIP this folder and send it to my server to
 
 NEW in v2.0: Includes the Bobbycar Sidecar Agent (zg_agent.py), a drop-in autonomous AI coder powered by Google's Gemma 4, that reads your project, writes code, and pushes commits—all completely client-side.
 
-✨ Core Features
+# ✨ Core Features
 
 Zero Dependencies: The CLI uses pure Python standard libraries (no pip install). The backend is a single PHP file using PDO MySQL.
 
@@ -24,7 +24,7 @@ Smart Globbing: The ignore list supports powerful glob patterns (*.env, node_mod
 
 Auto-Pruning: Keeps your server clean. Automatically deletes old snapshots and keeps only the latest 50 commits per repository.
 
-🚀 60-Second Setup
+# 🚀 60-Second Setup
 
 1. The Server (Backend)
 
@@ -54,7 +54,7 @@ Save and push your first snapshot:
 $ python zg.py save "Initial Commit"
 
 
-🤖 Meet Bobbycar (The Gemma 4 Agent)
+# 🤖 Meet Bobbycar (The Gemma 4 Agent)
 
 ZeroGit comes with a built-in AI Sidecar (zg_agent.py). It uses Google's Gemma 4 Open Weights via the Gemini API to autonomously code in your project. It acts as a client, meaning your backend needs zero AI-bloat.
 
@@ -95,7 +95,7 @@ python zg.py history - Displays the timeline of your snapshots.
 
 python zg.py undo <ID> - Safely downloads a snapshot, verifies it in a temp-folder (Extract-then-Swap), and overwrites your local state.
 
-⚙️ Configuration & Security
+# ⚙️ Configuration & Security
 
 When you run init, ZeroGit creates a hidden .zg_config.json file. You can edit this file to add wildcard patterns that should never be uploaded.
 
@@ -113,7 +113,7 @@ When you run init, ZeroGit creates a hidden .zg_config.json file. You can edit t
 
 Note: ZeroGit automatically patches critical secrets (*.env, *.pem) into your ignore list to prevent accidental leaks to the server or the AI Agent.
 
-🛡️ Enterprise-Grade Pragmatism
+# 🛡️ Enterprise-Grade Pragmatism
 
 Zip-Slip Protection: Both the Web-Editor and the Python Client strictly sanitize zip-entry paths, preventing directory traversal attacks during extraction.
 
