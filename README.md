@@ -109,7 +109,7 @@ When you run init, ZeroGit creates a hidden .zg_config.json file. You can edit t
         "node_modules"
     ]
 }
-``
+```
 
 Note: ZeroGit automatically patches critical secrets (*.env, *.pem) into your ignore list to prevent accidental leaks to the server or the AI Agent.
 
