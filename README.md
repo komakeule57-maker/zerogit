@@ -113,7 +113,7 @@ When you run init, ZeroGit creates a hidden .zg_config.json file. You can edit t
 
 Note: ZeroGit automatically patches critical secrets (*.env, *.pem) into your ignore list to prevent accidental leaks to the server or the AI Agent.
 
-# 🛡️ Enterprise-Grade Pragmatism
+# 🛡️ Security, Realistically
 
 Zip-Slip Protection: Both the Web-Editor and the Python Client strictly sanitize zip-entry paths, preventing directory traversal attacks during extraction.
 
