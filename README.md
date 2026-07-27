@@ -18,7 +18,7 @@ Token-Based Auth: Your real password never travels over the network after the in
 
 Collision Detection (Atomic): If you edit code in the Web UI and try to push from your terminal later, ZeroGit safely blocks the push to prevent blind overwrites (unless you use --force).
 
-Smart Globbing: The ignore list supports powerful glob patterns (*.env, node_modules/**, **secret**) to keep your payloads light and secure.
+Smart Globbing: The ignore list supports powerful glob patterns (*.env, node_modules/**, \*secret\*) to keep your payloads light and secure.
 
 1-Click Forks: Found a cool public repo on a ZeroGit instance? Fork it into your private workspace with a single click.
 
