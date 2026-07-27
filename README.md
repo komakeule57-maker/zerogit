@@ -81,7 +81,7 @@ Automatically commit and push the result to your ZeroGit server!
 
 (Note: On first run, it will ask for a free Google AI Studio API key).
 
-🛠️ CLI Commands (zg.py)
+# 🛠️ CLI Commands (zg.py)
 
 python zg.py init - Links the current folder to your ZeroGit server.
 
