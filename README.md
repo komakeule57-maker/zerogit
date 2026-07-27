@@ -98,7 +98,7 @@ python zg.py undo <ID> - Safely downloads a snapshot, verifies it in a temp-fold
 # ⚙️ Configuration & Security
 
 When you run init, ZeroGit creates a hidden .zg_config.json file. You can edit this file to add wildcard patterns that should never be uploaded.
-
+```
 {
     "url": "https://yourdomain.com/zerogit.php",
     "ignore_list": [
@@ -109,7 +109,7 @@ When you run init, ZeroGit creates a hidden .zg_config.json file. You can edit t
         "node_modules"
     ]
 }
-
+``
 
 Note: ZeroGit automatically patches critical secrets (*.env, *.pem) into your ignore list to prevent accidental leaks to the server or the AI Agent.
 
