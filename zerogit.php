@@ -32,11 +32,19 @@ function prune_repo($db, $repo_id, $snap_dir) {
 // =========================================================================
 // 1. DATENBANK & KONFIGURATION
 // =========================================================================
-$db_host = 'localhost';
-$db_name = 'freya_zerogit';
-$db_user = 'freya_absti';
-$db_pass = 'eQ7XhkL8SefZNqkc';
-$snap_dir = __DIR__ . '/snapshots';
+$config_file = __DIR__ . '/zg_env.php';
+if (!file_exists($config_file)) {
+    $tpl = "<?php\n// ZeroGit Environment Config\n// TIPP: Ändere 'snap_dir' idealerweise auf einen Pfad außerhalb des Webroots!\nreturn [\n    'db_host' => 'localhost',\n    'db_name' => 'freya_zerogit',\n    'db_user' => 'freya_absti',\n    'db_pass' => 'eQ7XhkL8SefZNqkc', // ERFOLGREICH AUSGELAGERT\n    'snap_dir' => __DIR__ . '/snapshots'\n];\n";
+    file_put_contents($config_file, $tpl);
+    die("🛡️ <b>ZeroGit Security Lock:</b> Eine Konfigurationsdatei (<code>zg_env.php</code>) wurde neben diesem Skript erstellt. Bitte verschiebe sie samt Snapshots ggf. eine Ebene über dein Webroot, passe den Pfad oben im PHP-Code (Zeile 36) an und lade die Seite neu.");
+}
+$env = require $config_file;
+
+$db_host = $env['db_host'];
+$db_name = $env['db_name'];
+$db_user = $env['db_user'];
+$db_pass = $env['db_pass'];
+$snap_dir = $env['snap_dir'];
 
 if (!is_dir($snap_dir)) {
     @mkdir($snap_dir, 0777, true);
@@ -73,11 +81,11 @@ try {
         );
     ");
     
-    // Fallback Admin
+    // Check if setup is needed (Kein unsicheres Auto-admin:admin mehr!)
+    $setup_mode = false;
     $stmt = $db->query("SELECT id FROM users LIMIT 1");
     if ($stmt->rowCount() === 0) {
-        $stmt = $db->prepare("INSERT INTO users (username, password) VALUES (?, ?)");
-        $stmt->execute(['admin', password_hash('admin', PASSWORD_DEFAULT)]);
+        $setup_mode = true;
     }
 
     // Auto-Patch für Public-Spalte
@@ -175,7 +183,7 @@ if ($json && isset($json['action'])) {
         $client_base = isset($json['base_commit']) ? (int)$json['base_commit'] : 0;
         $force = isset($json['force']) ? (bool)$json['force'] : false;
         
-        $stmt = $db->prepare("SELECT id FROM commits WHERE repo_id = ? ORDER BY id DESC LIMIT 1");
+        $stmt = $db->prepare("SELECT id FROM commits WHERE repo_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE");
         $stmt->execute([$repo_id]);
         $latest = $stmt->fetch();
         $latest_id = $latest ? (int)$latest['id'] : 0;
@@ -283,6 +291,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $stmt = $db->prepare("INSERT INTO users (username, password, api_token) VALUES (?, ?, ?)");
                     $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $token]);
                     $success = "Registrierung erfolgreich!";
+                    
+                    global $setup_mode;
+                    if (isset($setup_mode) && $setup_mode) {
+                        $_SESSION['user_id'] = $db->lastInsertId();
+                        $_SESSION['username'] = $username;
+                        $_SESSION['api_token'] = $token;
+                        header("Location: ?"); exit;
+                    }
                 }
             }
         }
@@ -355,11 +371,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     // Führende Slashes entfernen und Mehrfach-Slashes zu einem zusammenfassen
                     $filepath = ltrim(preg_replace('/\/+/', '/', $filepath), '/');
                     
-                    $stmt = $db->prepare("SELECT hash FROM commits WHERE repo_id = ? AND repo_id IN (SELECT id FROM repos WHERE user_id = ?) ORDER BY id DESC LIMIT 1");
+                    $stmt = $db->prepare("SELECT id, hash FROM commits WHERE repo_id = ? AND repo_id IN (SELECT id FROM repos WHERE user_id = ?) ORDER BY id DESC LIMIT 1");
                     $stmt->execute([$repo_id, $_SESSION['user_id']]);
                     $latest = $stmt->fetch();
                     
-                    if ($latest && file_exists($snap_dir . "/repo_{$repo_id}_{$latest['hash']}.pack")) {
+                    $base_commit_id = isset($_POST['base_commit_id']) ? (int)$_POST['base_commit_id'] : 0;
+                    
+                    if ($latest && $latest['id'] !== $base_commit_id) {
+                        $error = "🚨 Kollision! Jemand (oder dein CLI-Agent) hat in der Zwischenzeit einen Commit gepusht. Deine Web-Änderungen würden überschreiben. Bitte lade die Seite neu.";
+                    } elseif ($latest && file_exists($snap_dir . "/repo_{$repo_id}_{$latest['hash']}.pack")) {
                         $old_zip = $snap_dir . "/repo_{$repo_id}_{$latest['hash']}.pack";
                         $temp_zip = sys_get_temp_dir() . '/zg_temp_' . uniqid() . '.zip';
                         copy($old_zip, $temp_zip);
@@ -509,6 +529,7 @@ if ($active_repo_id) {
                         <form method="POST" action="?repo=<?= $active_repo_id ?>" class="p-4">
                             <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
                             <input type="hidden" name="action" value="web_commit"><input type="hidden" name="repo_id" value="<?= $active_repo_id ?>"><input type="hidden" name="filepath" value="<?= htmlspecialchars($edit_file) ?>">
+                            <input type="hidden" name="base_commit_id" value="<?= $latest_commit['id'] ?>">
                             <textarea id="code_editor" name="content"><?= htmlspecialchars($file_content) ?></textarea>
                             <div class="mt-4 flex gap-4">
                                 <?php if ($is_owner): ?>
@@ -644,15 +665,23 @@ if ($active_repo_id) {
                 <div class="flex gap-8 items-start justify-center mt-10">
                     <!-- Login Panel -->
                     <div class="zg-panel p-8 w-full max-w-md">
-                        <h2 class="text-xl text-white mb-6">Login / Registrieren</h2>
+                        <h2 class="text-xl text-white mb-6">
+                            <?php global $setup_mode; if(isset($setup_mode) && $setup_mode): ?>
+                                🛡️ Initiales Setup: Admin anlegen
+                            <?php else: ?>
+                                Login / Registrieren
+                            <?php endif; ?>
+                        </h2>
                         <form method="POST">
                             <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
-                            <input type="hidden" name="action" value="<?= isset($_GET['view']) ? 'register' : 'login' ?>">
+                            <input type="hidden" name="action" value="<?= (isset($_GET['view']) || (isset($setup_mode) && $setup_mode)) ? 'register' : 'login' ?>">
                             <input type="text" name="username" class="zg-input mb-4" required placeholder="Username">
                             <input type="password" name="password" class="zg-input mb-6" required placeholder="Passwort">
-                            <button type="submit" class="zg-btn w-full"><?= isset($_GET['view']) ? 'Account erstellen' : 'Einloggen' ?></button>
+                            <button type="submit" class="zg-btn w-full"><?= (isset($_GET['view']) || (isset($setup_mode) && $setup_mode)) ? 'Account erstellen' : 'Einloggen' ?></button>
                         </form>
-                        <div class="mt-4 text-center text-sm"><a href="?<?= isset($_GET['view']) ? '' : 'view=register' ?>" class="text-blue-400">Modus wechseln</a></div>
+                        <?php if(!isset($setup_mode) || !$setup_mode): ?>
+                            <div class="mt-4 text-center text-sm"><a href="?<?= isset($_GET['view']) ? '' : 'view=register' ?>" class="text-blue-400">Modus wechseln</a></div>
+                        <?php endif; ?>
                     </div>
 
                     <!-- Explore-Ansicht für Gäste -->
